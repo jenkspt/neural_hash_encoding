@@ -109,11 +109,12 @@ if __name__ == "__main__":
         rgb = ImageModel((H, W), table_size=table_size).apply({'params': params}, xy)
         crop2 = (rgb.reshape(*crop.shape) * 255).round(0).clip(0, 255).astype(np.uint8)
 
-        fig, axs = plt.subplots(1, 2, figsize=(12, 16))
+        fig, axs = plt.subplots(1, 2, figsize=(16, 12))
         axs[0].imshow(crop)
         axs[0].set_title('Reference')
         axs[1].imshow(crop2)
         axs[1].set_title(f'Encoding')
+        fig.tight_layout()
         fig.savefig(path)
 
 
