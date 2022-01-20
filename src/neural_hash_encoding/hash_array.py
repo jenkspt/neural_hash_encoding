@@ -23,7 +23,7 @@ class HashArray2D:
     https://github.com/NVlabs/tiny-cuda-nn/blob/master/include/tiny-cuda-nn/encodings/grid.h#L66-L80
     """
     def spatial_hash(self, y, x):
-        return x * (y % PRIMES[0]) % self.data.shape[-2]
+        return (x ^ (y * PRIMES[0])) % self.data.shape[-2]
 
     def __getitem__(self, i):
         x, y, d = i[-3:] if len(i) == 3 else (*i[-2:], Ellipsis)
