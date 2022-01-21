@@ -1,6 +1,8 @@
-from typing import Tuple, Any
+from typing import Tuple, Any, Iterable
+from functools import reduce
+import operator
 import numpy as np
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import jax.numpy as jnp
 from jax.tree_util import register_pytree_node_class
 
@@ -9,26 +11,56 @@ Mutli-res Grid code from NVIDIA Paper:
 https://github.com/NVlabs/tiny-cuda-nn/blob/d0639158dd64b5d146d659eb881702304abaaa24/include/tiny-cuda-nn/encodings/grid.h
 """
 
+Shape = Iterable[int]
+Dtype = Any  # this could be a real type?
 Array = Any
 
-PRIMES = (73856093, 19349663)
+PRIMES = (1, 73856093, 19349663, 83492791)
+
 
 @register_pytree_node_class
 @dataclass
-class HashArray2D:
-    data: Array
-    shape: Tuple[int, int]
-
+class HashArray:
     """
+    This is a sparse array backed by simple hash table. It minimally implements an array
+    interface as to be used for (nd) linear interpolation.
+    There is no collision resolution or even bounds checking.
+
+    Attributes:
+      data: The hash table represented as a 2D array.
+        First dim is indexed with the hash index and second dim is the feature
+      shape: The shape of the array.
+
+    NVIDIA Implementation of multi-res hash grid:
     https://github.com/NVlabs/tiny-cuda-nn/blob/master/include/tiny-cuda-nn/encodings/grid.h#L66-L80
     """
-    def spatial_hash(self, y, x):
-        return (x ^ (y * PRIMES[0])) % self.data.shape[-2]
+    data: Array
+    shape: Shape
+
+    def __post_init__(self):
+        assert self.data.ndim == 2, "Hash table data should be 2d"
+        assert self.data.shape[1] == self.shape[-1]
+
+    @property
+    def ndim(self):
+        return len(self.shape)
+
+    @property
+    def dtype(self):
+        return self.data.dtype
+
+    def spatial_hash(self, coords):
+        assert len(coords) <= len(PRIMES), "Add more PRIMES!"
+        if len(coords) == 1:
+            i = (coords[0] ^ PRIMES[1])
+        else:
+            i = reduce(operator.xor, (c * p for c, p in zip(coords, PRIMES)))
+        return i % self.data.shape[0]
 
     def __getitem__(self, i):
-        x, y, d = i[-3:] if len(i) == 3 else (*i[-2:], Ellipsis)
-        i = self.spatial_hash(y, x)
-        return self.data[i, d]
+        *spatial_i, feature_i = i if len(i) == self.ndim else (*i, Ellipsis)
+        i = self.spatial_hash(spatial_i)
+        return self.data[i, feature_i]
     
     def __array__(self, dtype=None):
         H, W, _ = self.shape
@@ -37,7 +69,7 @@ class HashArray2D:
         return arr
 
     def __repr__(self):
-        return "HashArray2D(" + str(np.asarray(self)) + ")"
+        return "HashArray(" + str(np.asarray(self)) + ")"
 
     def tree_flatten(self):
         return (self.data, self.shape)

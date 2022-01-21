@@ -5,8 +5,8 @@ import jax
 import jax.numpy as jnp
 from flax import linen as nn
 
-from neural_hash_encoding.hash_array import HashArray2D, _get_level_res_nd
-from neural_hash_encoding.interpolate import Interpolate2D
+from neural_hash_encoding.hash_array import HashArray, _get_level_res_nd
+from neural_hash_encoding.interpolate import Interpolate
 
 # Copied from flax
 PRNGKey = Any
@@ -20,31 +20,28 @@ def uniform_init(minval=0, maxval=0.01, dtype=jnp.float64):
     return init
 
 
-class DenseEncodingLevel2D(nn.Module):
+class DenseEncodingLevel(nn.Module):
     res: Shape
     features: int = 2
     dtype: Dtype = jnp.float32
     param_dtype: Dtype = jnp.float32
     table_init: Callable[[PRNGKey, Shape, Dtype], Array] = uniform_init(-1e-4, 1e-4)
 
-    interp: Interpolate2D = field(init=False)
+    interp: Interpolate = field(init=False)
 
     def setup(self):
         array = self.param('table',
                            self.table_init,
                            (*self.res, self.features),
                            self.param_dtype)
-        self.interp = Interpolate2D(jnp.asarray(array))
+        self.interp = Interpolate(jnp.asarray(array), order=1, mode='nearest')
     
-    def __call__(self, xy):
-        assert xy.shape[-1] == 2
-        xy = jnp.asarray(xy, self.dtype)
-        x, y = xy[..., 0], xy[..., 1]
-        return self.interp(x, y, normalized=True)
+    def __call__(self, coords):
+        assert len(coords) == (self.interp.arr.ndim - 1)
+        return self.interp(coords, normalized=True)
 
 
-
-class HashEncodingLevel2D(nn.Module):
+class HashEncodingLevel(nn.Module):
     res: Shape
     features: int = 2
     table_size: int = 2**14
@@ -52,7 +49,7 @@ class HashEncodingLevel2D(nn.Module):
     param_dtype: Dtype = jnp.float32
     table_init: Callable[[PRNGKey, Shape, Dtype], Array] = uniform_init(-1e-4, 1e-4)
 
-    interp: Interpolate2D = field(init=False)
+    interp: Interpolate = field(init=False)
 
     def setup(self):
         table = self.param('table',
@@ -60,18 +57,15 @@ class HashEncodingLevel2D(nn.Module):
                            (self.table_size, self.features),
                            self.param_dtype)
         shape = (*self.res, self.features)
-        array = HashArray2D(jnp.asarray(table), shape)
-        self.interp = Interpolate2D(array)
+        array = HashArray(jnp.asarray(table), shape)
+        self.interp = Interpolate(array, order=1, mode='nearest')
 
-    def __call__(self, xy):
-        assert xy.shape[-1] == 2
-        xy = jnp.asarray(xy, self.dtype)
-        x, y = xy[..., 0], xy[..., 1]
-        return self.interp(x, y, normalized=True)
+    def __call__(self, coords):
+        assert len(coords) == (self.interp.arr.ndim - 1)
+        return self.interp(coords, normalized=True)
 
 
-class MultiResEncoding2D(nn.Module):
-    
+class MultiResEncoding(nn.Module):
     levels: int=16
     table_size: int = 2**14
     features: int = 2
@@ -89,12 +83,12 @@ class MultiResEncoding2D(nn.Module):
             features=self.features, dtype=self.dtype,
             param_dtype=self.param_dtype, table_init=self.param_init)
         # First level is always dense
-        L0 = DenseEncodingLevel2D(res_levels[0], **kwargs)
+        L0 = DenseEncodingLevel(res_levels[0], **kwargs)
         # Rest are sparse hash arrays
-        self.L = tuple([L0, *(HashEncodingLevel2D(l, table_size=self.table_size, **kwargs) for l in res_levels[1:])])
+        self.L = tuple([L0, *(HashEncodingLevel(l, table_size=self.table_size, **kwargs) for l in res_levels[1:])])
 
-    def __call__(self, xy):
-        features = [l(xy) for l in self.L]
+    def __call__(self, coords):
+        features = [l(coords) for l in self.L]
         features = jnp.concatenate(features, -1)
         return features
 
@@ -121,11 +115,11 @@ class ImageModel(nn.Module):
     minres: Shape = (16, 16)
 
     def setup(self):
-        self.embedding = MultiResEncoding2D(self.levels, self.table_size,
+        self.embedding = MultiResEncoding(self.levels, self.table_size,
                                             self.features, self.minres, self.res)
         self.decoder = MLP((64, 64, self.channels))
     
-    def __call__(self, xy):
-        features = self.embedding(xy)
+    def __call__(self, coords):
+        features = self.embedding(coords)
         color = self.decoder(features)
         return color

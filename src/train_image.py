@@ -32,8 +32,9 @@ class RandomPixelData(IterableDataset):
             x = np.random.randint(0, W-1, self.batch_size)
             y = np.random.randint(0, H-1, self.batch_size)
             rgb = img[y, x, :]
-            xy = np.stack([x / (W-1), y / (H-1)], -1)
-            yield xy, rgb / 255
+            # Normalize coordinates to [0, 1]
+            yx = [y / (H-1), x / (W-1)]
+            yield yx, rgb / 255
 
 
 class RandomPixelLoader(DataLoader):
@@ -77,7 +78,7 @@ if __name__ == "__main__":
     def create_train_state(rng, learning_rate):
         """Creates initial `TrainState`."""
         image_model = ImageModel(res=(H, W), table_size=table_size)
-        x = jnp.ones((1, 2))    # Dummy data
+        x = jnp.ones((2, 1))    # Dummy data
         params = image_model.init(rng, x)['params']
         tx = optax.adamw(learning_rate, b1=.9, b2=.99, eps=1e-10)
         return train_state.TrainState.create(
@@ -86,10 +87,10 @@ if __name__ == "__main__":
     @jax.jit
     def train_step(state, batch):
         """Train for a single step."""
-        xy, colors_targ = batch
+        yx, colors_targ = batch
 
         def loss_fn(params, weight_decay=1e-6):
-            colors_pred = ImageModel((H, W), table_size=table_size).apply({'params': params}, xy)
+            colors_pred = ImageModel((H, W), table_size=table_size).apply({'params': params}, yx)
             mlp_params = params['decoder']
             loss = mse_loss(colors_pred, colors_targ) + l2_loss(mlp_params, weight_decay)
             return loss, colors_pred
@@ -105,8 +106,8 @@ if __name__ == "__main__":
         assert len(s) == 3
         crop = img[s]
 
-        xy = jnp.roll(jnp.mgrid[s[:2]], 1, 0).reshape(2, -1).T / jnp.array([W-1, H-1])
-        rgb = ImageModel((H, W), table_size=table_size).apply({'params': params}, xy)
+        yx = jnp.mgrid[s[:2]].reshape(2, -1) / jnp.array([H-1, W-1]).reshape(2, 1)
+        rgb = ImageModel((H, W), table_size=table_size).apply({'params': params}, yx)
         crop2 = (rgb.reshape(*crop.shape) * 255).round(0).clip(0, 255).astype(np.uint8)
 
         fig, axs = plt.subplots(1, 2, figsize=(16, 12))
@@ -133,7 +134,6 @@ if __name__ == "__main__":
     for epoch in range(epochs):
         for i, batch in enumerate(loader):
             step = epoch * len(ds) + i
-            batch = (jnp.asarray(batch[0]), jnp.asarray(batch[1]))
             state, metrics = train_step(state, batch)
             loss, psnr = metrics['loss'], metrics['psnr']
             if step > 1 and (np.log10(step) == int(np.log10(step))):   # exponential logging
